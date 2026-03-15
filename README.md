@@ -204,7 +204,7 @@ Configure the MCP server to point at the right bridge:
 }
 ```
 
-> **Auto-detection:** If `whatsapp-bridge-business/store/messages.db` exists and `WHATSAPP_DB_PATH` is not set, the MCP server automatically uses the business bridge database.
+> **Note:** `WHATSAPP_DB_PATH` must be set explicitly for the business bridge — the default always points to `whatsapp-bridge/store/messages.db` (personal). `WHATSAPP_API_URL` must include the `/api` suffix, e.g. `http://localhost:8742/api`.
 
 ## Troubleshooting
 
