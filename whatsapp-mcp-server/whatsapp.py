@@ -9,15 +9,10 @@ import audio
 
 import os
 
-def _default_db_path() -> str:
-    base = os.path.dirname(os.path.abspath(__file__))
-    business_db = os.path.normpath(os.path.join(base, '..', 'whatsapp-bridge-business', 'store', 'messages.db'))
-    regular_db = os.path.normpath(os.path.join(base, '..', 'whatsapp-bridge', 'store', 'messages.db'))
-    if os.path.exists(business_db):
-        return business_db
-    return regular_db
-
-MESSAGES_DB_PATH = os.environ.get("WHATSAPP_DB_PATH", _default_db_path())
+MESSAGES_DB_PATH = os.environ.get(
+    "WHATSAPP_DB_PATH",
+    os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db'))
+)
 WHATSAPP_API_BASE_URL = os.environ.get("WHATSAPP_API_URL", "http://localhost:8741/api")
 
 @dataclass
