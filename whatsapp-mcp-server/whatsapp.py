@@ -182,8 +182,9 @@ def list_messages(
             params.append(chat_jid)
             
         if query:
-            where_clauses.append("LOWER(messages.content) LIKE LOWER(?)")
-            params.append(f"%{query}%")
+            # instr() is Unicode-safe; LOWER() only handles ASCII in SQLite
+            where_clauses.append("(instr(LOWER(messages.content), LOWER(?)) > 0 OR instr(messages.content, ?) > 0)")
+            params.extend([query, query])
             
         if where_clauses:
             query_parts.append("WHERE " + " AND ".join(where_clauses))
@@ -407,20 +408,17 @@ def search_contacts(query: str) -> List[Contact]:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
-        # Split query into characters to support partial matching
-        search_pattern = '%' +query + '%'
-        
         cursor.execute("""
-            SELECT DISTINCT 
+            SELECT DISTINCT
                 jid,
                 name
             FROM chats
-            WHERE 
-                (LOWER(name) LIKE LOWER(?) OR LOWER(jid) LIKE LOWER(?))
+            WHERE
+                (instr(LOWER(name), LOWER(?)) > 0 OR instr(name, ?) > 0 OR LOWER(jid) LIKE LOWER(?))
                 AND jid NOT LIKE '%@g.us'
             ORDER BY name, jid
             LIMIT 50
-        """, (search_pattern, search_pattern))
+        """, (query, query, f"%{query}%"))
         
         contacts = cursor.fetchall()
         
