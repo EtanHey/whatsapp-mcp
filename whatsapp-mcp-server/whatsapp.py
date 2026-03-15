@@ -7,8 +7,18 @@ import requests
 import json
 import audio
 
-MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
-WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
+import os
+
+def _default_db_path() -> str:
+    base = os.path.dirname(os.path.abspath(__file__))
+    business_db = os.path.normpath(os.path.join(base, '..', 'whatsapp-bridge-business', 'store', 'messages.db'))
+    regular_db = os.path.normpath(os.path.join(base, '..', 'whatsapp-bridge', 'store', 'messages.db'))
+    if os.path.exists(business_db):
+        return business_db
+    return regular_db
+
+MESSAGES_DB_PATH = os.environ.get("WHATSAPP_DB_PATH", _default_db_path())
+WHATSAPP_API_BASE_URL = os.environ.get("WHATSAPP_API_URL", "http://localhost:8741/api")
 
 @dataclass
 class Message:
@@ -350,8 +360,9 @@ def list_chats(
         params = []
         
         if query:
-            where_clauses.append("(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)")
-            params.extend([f"%{query}%", f"%{query}%"])
+            # Use instr() for Unicode-safe substring search (LOWER() only handles ASCII in SQLite)
+            where_clauses.append("(instr(LOWER(chats.name), LOWER(?)) > 0 OR instr(chats.name, ?) > 0 OR chats.jid LIKE ?)")
+            params.extend([query, query, f"%{query}%"])
             
         if where_clauses:
             query_parts.append("WHERE " + " AND ".join(where_clauses))
