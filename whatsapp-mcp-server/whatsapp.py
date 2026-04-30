@@ -13,7 +13,41 @@ MESSAGES_DB_PATH = os.environ.get(
     "WHATSAPP_DB_PATH",
     os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db'))
 )
+WHATSMEOW_DB_PATH = os.environ.get("WHATSAPP_WHATSMEOW_DB_PATH") or os.path.join(
+    os.path.dirname(MESSAGES_DB_PATH), "whatsapp.db"
+)
 WHATSAPP_API_BASE_URL = os.environ.get("WHATSAPP_API_URL", "http://localhost:8741/api")
+
+
+def _attach_whatsmeow(conn: sqlite3.Connection) -> bool:
+    if not os.path.exists(WHATSMEOW_DB_PATH):
+        return False
+
+    try:
+        conn.execute("ATTACH DATABASE ? AS w", (WHATSMEOW_DB_PATH,))
+        conn.execute("SELECT 1 FROM w.whatsmeow_lid_map LIMIT 1")
+        conn.execute("SELECT 1 FROM w.whatsmeow_contacts LIMIT 1")
+        return True
+    except sqlite3.Error:
+        try:
+            conn.execute("DETACH DATABASE w")
+        except sqlite3.Error:
+            pass
+        return False
+
+
+def _display_name_sql(use_whatsmeow: bool) -> str:
+    if not use_whatsmeow:
+        return "chats.name"
+
+    return """
+        COALESCE(
+            NULLIF(ct.full_name, ''),
+            NULLIF(ct.first_name, ''),
+            NULLIF(ct.push_name, ''),
+            chats.name
+        )
+    """
 
 @dataclass
 class Message:
@@ -333,18 +367,28 @@ def list_chats(
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
+        use_whatsmeow = _attach_whatsmeow(conn)
+        display_name_sql = _display_name_sql(use_whatsmeow)
         
         # Build base query
-        query_parts = ["""
+        query_parts = [f"""
             SELECT 
                 chats.jid,
-                chats.name,
+                {display_name_sql} AS display_name,
                 chats.last_message_time,
                 messages.content as last_message,
                 messages.sender as last_sender,
                 messages.is_from_me as last_is_from_me
             FROM chats
         """]
+
+        if use_whatsmeow:
+            query_parts.append("""
+                LEFT JOIN w.whatsmeow_lid_map lm ON (lm.lid || '@lid') = chats.jid
+                LEFT JOIN w.whatsmeow_contacts ct ON
+                    ct.their_jid = (lm.pn || '@s.whatsapp.net')
+                    OR ct.their_jid = chats.jid
+            """)
         
         if include_last_message:
             query_parts.append("""
@@ -357,14 +401,20 @@ def list_chats(
         
         if query:
             # Use instr() for Unicode-safe substring search (LOWER() only handles ASCII in SQLite)
-            where_clauses.append("(instr(LOWER(chats.name), LOWER(?)) > 0 OR instr(chats.name, ?) > 0 OR chats.jid LIKE ?)")
-            params.extend([query, query, f"%{query}%"])
+            where_clauses.append(
+                f"(instr(LOWER({display_name_sql}), LOWER(?)) > 0 "
+                f"OR instr({display_name_sql}, ?) > 0 "
+                "OR instr(LOWER(chats.name), LOWER(?)) > 0 "
+                "OR instr(chats.name, ?) > 0 "
+                "OR chats.jid LIKE ?)"
+            )
+            params.extend([query, query, query, query, f"%{query}%"])
             
         if where_clauses:
             query_parts.append("WHERE " + " AND ".join(where_clauses))
             
         # Add sorting
-        order_by = "chats.last_message_time DESC" if sort_by == "last_active" else "chats.name"
+        order_by = "chats.last_message_time DESC" if sort_by == "last_active" else "display_name"
         query_parts.append(f"ORDER BY {order_by}")
         
         # Add pagination
@@ -402,18 +452,37 @@ def search_contacts(query: str) -> List[Contact]:
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
-        
-        cursor.execute("""
+        use_whatsmeow = _attach_whatsmeow(conn)
+        display_name_sql = _display_name_sql(use_whatsmeow)
+
+        query_parts = [f"""
             SELECT DISTINCT
-                jid,
-                name
+                chats.jid,
+                {display_name_sql} AS display_name
             FROM chats
+        """]
+
+        if use_whatsmeow:
+            query_parts.append("""
+                LEFT JOIN w.whatsmeow_lid_map lm ON (lm.lid || '@lid') = chats.jid
+                LEFT JOIN w.whatsmeow_contacts ct ON
+                    ct.their_jid = (lm.pn || '@s.whatsapp.net')
+                    OR ct.their_jid = chats.jid
+            """)
+
+        query_parts.append(f"""
             WHERE
-                (instr(LOWER(name), LOWER(?)) > 0 OR instr(name, ?) > 0 OR LOWER(jid) LIKE LOWER(?))
-                AND jid NOT LIKE '%@g.us'
-            ORDER BY name, jid
+                (instr(LOWER({display_name_sql}), LOWER(?)) > 0
+                 OR instr({display_name_sql}, ?) > 0
+                 OR instr(LOWER(chats.name), LOWER(?)) > 0
+                 OR instr(chats.name, ?) > 0
+                 OR LOWER(chats.jid) LIKE LOWER(?))
+                AND chats.jid NOT LIKE '%@g.us'
+            ORDER BY display_name, chats.jid
             LIMIT 50
-        """, (query, query, f"%{query}%"))
+        """)
+
+        cursor.execute(" ".join(query_parts), (query, query, query, query, f"%{query}%"))
         
         contacts = cursor.fetchall()
         
