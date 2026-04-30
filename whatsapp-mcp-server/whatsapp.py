@@ -418,7 +418,7 @@ def list_chats(
         query_parts.append(f"ORDER BY {order_by}")
         
         # Add pagination
-        offset = (page ) * limit
+        offset = page * limit
         query_parts.append("LIMIT ? OFFSET ?")
         params.extend([limit, offset])
         
