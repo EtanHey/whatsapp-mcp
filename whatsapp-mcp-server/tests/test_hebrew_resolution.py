@@ -217,3 +217,30 @@ def test_does_not_resolve_etan_self_lid(monkeypatch, tmp_path):
     assert chats[0].jid == SELF_LID
     assert chats[0].name == SELF_ALIAS
     assert chats[0].name != EFFIE_ALIAS
+
+
+def test_list_chats_deduplicates_multiple_contact_rows(monkeypatch, tmp_path):
+    store_dir = tmp_path / "store"
+    store_dir.mkdir()
+    messages_db = store_dir / "messages.db"
+    whatsmeow_db = store_dir / "whatsapp.db"
+
+    create_messages_db(
+        messages_db,
+        chats=[{"jid": EFFIE_LID, "name": "129386544119851", "timestamp": "2026-04-30T10:00:00"}],
+    )
+    create_whatsmeow_db(
+        whatsmeow_db,
+        lid_map_rows=[("272751982018765", EFFIE_PHONE)],
+        contact_rows=[
+            ("me@s.whatsapp.net", f"{EFFIE_PHONE}@s.whatsapp.net", "אפי", EFFIE_ALIAS, "Efi A"),
+            ("alt@s.whatsapp.net", f"{EFFIE_PHONE}@s.whatsapp.net", "אפי", EFFIE_ALIAS, "Efi A"),
+        ],
+    )
+    whatsapp = load_whatsapp_module(monkeypatch, messages_db, whatsmeow_db)
+
+    chats = whatsapp.list_chats(query="אפי")
+
+    assert len(chats) == 1
+    assert chats[0].jid == EFFIE_LID
+    assert chats[0].name == EFFIE_ALIAS

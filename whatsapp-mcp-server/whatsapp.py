@@ -49,6 +49,26 @@ def _display_name_sql(use_whatsmeow: bool) -> str:
         )
     """
 
+
+def _whatsmeow_joins_sql(use_whatsmeow: bool) -> str:
+    if not use_whatsmeow:
+        return ""
+
+    return """
+        LEFT JOIN w.whatsmeow_lid_map lm ON (lm.lid || '@lid') = chats.jid
+        LEFT JOIN (
+            SELECT
+                their_jid,
+                MAX(NULLIF(full_name, '')) AS full_name,
+                MAX(NULLIF(first_name, '')) AS first_name,
+                MAX(NULLIF(push_name, '')) AS push_name
+            FROM w.whatsmeow_contacts
+            GROUP BY their_jid
+        ) ct ON
+            ct.their_jid = (lm.pn || '@s.whatsapp.net')
+            OR ct.their_jid = chats.jid
+    """
+
 @dataclass
 class Message:
     timestamp: datetime
@@ -369,6 +389,7 @@ def list_chats(
         cursor = conn.cursor()
         use_whatsmeow = _attach_whatsmeow(conn)
         display_name_sql = _display_name_sql(use_whatsmeow)
+        whatsmeow_joins_sql = _whatsmeow_joins_sql(use_whatsmeow)
         
         # Build base query
         query_parts = [f"""
@@ -382,13 +403,8 @@ def list_chats(
             FROM chats
         """]
 
-        if use_whatsmeow:
-            query_parts.append("""
-                LEFT JOIN w.whatsmeow_lid_map lm ON (lm.lid || '@lid') = chats.jid
-                LEFT JOIN w.whatsmeow_contacts ct ON
-                    ct.their_jid = (lm.pn || '@s.whatsapp.net')
-                    OR ct.their_jid = chats.jid
-            """)
+        if whatsmeow_joins_sql:
+            query_parts.append(whatsmeow_joins_sql)
         
         if include_last_message:
             query_parts.append("""
@@ -454,6 +470,7 @@ def search_contacts(query: str) -> List[Contact]:
         cursor = conn.cursor()
         use_whatsmeow = _attach_whatsmeow(conn)
         display_name_sql = _display_name_sql(use_whatsmeow)
+        whatsmeow_joins_sql = _whatsmeow_joins_sql(use_whatsmeow)
 
         query_parts = [f"""
             SELECT DISTINCT
@@ -462,13 +479,8 @@ def search_contacts(query: str) -> List[Contact]:
             FROM chats
         """]
 
-        if use_whatsmeow:
-            query_parts.append("""
-                LEFT JOIN w.whatsmeow_lid_map lm ON (lm.lid || '@lid') = chats.jid
-                LEFT JOIN w.whatsmeow_contacts ct ON
-                    ct.their_jid = (lm.pn || '@s.whatsapp.net')
-                    OR ct.their_jid = chats.jid
-            """)
+        if whatsmeow_joins_sql:
+            query_parts.append(whatsmeow_joins_sql)
 
         query_parts.append(f"""
             WHERE
