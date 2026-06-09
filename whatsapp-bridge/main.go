@@ -13,7 +13,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -195,6 +197,13 @@ type SendMessageResponse struct {
 	Message string `json:"message"`
 }
 
+type HealthResponse struct {
+	Connected    bool   `json:"connected"`
+	LoggedOut    bool   `json:"loggedOut"`
+	Reconnecting bool   `json:"reconnecting"`
+	JID          string `json:"jid,omitempty"`
+}
+
 // SendMessageRequest represents the request body for the send message API
 type SendMessageRequest struct {
 	Recipient string `json:"recipient"`
@@ -202,10 +211,181 @@ type SendMessageRequest struct {
 	MediaPath string `json:"media_path,omitempty"`
 }
 
+type BridgeState struct {
+	mu           sync.RWMutex
+	loggedOut    bool
+	reconnecting bool
+}
+
+func NewBridgeState() *BridgeState {
+	return &BridgeState{}
+}
+
+func (state *BridgeState) SetLoggedOut() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.loggedOut = true
+	state.reconnecting = false
+}
+
+func (state *BridgeState) SetConnected() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.loggedOut = false
+	state.reconnecting = false
+}
+
+func (state *BridgeState) SetReconnecting(reconnecting bool) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.loggedOut {
+		state.reconnecting = false
+		return
+	}
+	state.reconnecting = reconnecting
+}
+
+func (state *BridgeState) IsLoggedOut() bool {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return state.loggedOut
+}
+
+func (state *BridgeState) IsReconnecting() bool {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return state.reconnecting
+}
+
+func (state *BridgeState) SendStatus(connected bool) (bool, string) {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	if state.loggedOut {
+		return false, "logged out from WhatsApp - re-pair needed"
+	}
+	if connected {
+		return true, ""
+	}
+	return false, "reconnecting to WhatsApp"
+}
+
+type ReconnectConfig struct {
+	Connect    func() error
+	HasSession func() bool
+	Sleep      func(time.Duration)
+	MinBackoff time.Duration
+	MaxBackoff time.Duration
+	Jitter     func(time.Duration) time.Duration
+	OnError    func(error, time.Duration)
+	OnSuccess  func()
+}
+
+type ReconnectManager struct {
+	state *BridgeState
+	cfg   ReconnectConfig
+	mu    sync.Mutex
+}
+
+func NewReconnectManager(state *BridgeState, cfg ReconnectConfig) *ReconnectManager {
+	if cfg.Sleep == nil {
+		cfg.Sleep = time.Sleep
+	}
+	if cfg.MinBackoff <= 0 {
+		cfg.MinBackoff = time.Second
+	}
+	if cfg.MaxBackoff <= 0 {
+		cfg.MaxBackoff = time.Minute
+	}
+	if cfg.Jitter == nil {
+		cfg.Jitter = func(base time.Duration) time.Duration {
+			if base <= 0 {
+				return 0
+			}
+			return time.Duration(rand.Int63n(int64(base / 4)))
+		}
+	}
+	return &ReconnectManager{state: state, cfg: cfg}
+}
+
+func (manager *ReconnectManager) Start(reason string) {
+	manager.mu.Lock()
+	if manager.state.IsLoggedOut() || !manager.cfg.HasSession() || manager.state.IsReconnecting() {
+		manager.mu.Unlock()
+		return
+	}
+	manager.state.SetReconnecting(true)
+	manager.mu.Unlock()
+
+	go manager.runReconnectLoop(reason)
+}
+
+func (manager *ReconnectManager) runReconnectLoop(reason string) {
+	_ = reason
+	backoff := manager.cfg.MinBackoff
+	for {
+		if manager.state.IsLoggedOut() || !manager.cfg.HasSession() {
+			manager.state.SetReconnecting(false)
+			return
+		}
+
+		if err := manager.cfg.Connect(); err != nil {
+			sleepFor := backoff + manager.cfg.Jitter(backoff)
+			if manager.cfg.OnError != nil {
+				manager.cfg.OnError(err, sleepFor)
+			}
+			manager.cfg.Sleep(sleepFor)
+			backoff *= 2
+			if backoff > manager.cfg.MaxBackoff {
+				backoff = manager.cfg.MaxBackoff
+			}
+			continue
+		}
+
+		manager.state.SetConnected()
+		if manager.cfg.OnSuccess != nil {
+			manager.cfg.OnSuccess()
+		}
+		return
+	}
+}
+
+func acquireSingleInstanceLock(lockPath string) (*os.File, error) {
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open lock file: %w", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lockFile.Close()
+		return nil, fmt.Errorf("another whatsapp bridge instance is already running for this store: %w", err)
+	}
+	if err := lockFile.Truncate(0); err != nil {
+		lockFile.Close()
+		return nil, fmt.Errorf("failed to truncate lock file: %w", err)
+	}
+	if _, err := fmt.Fprintf(lockFile, "%d\n", os.Getpid()); err != nil {
+		lockFile.Close()
+		return nil, fmt.Errorf("failed to write lock file: %w", err)
+	}
+	return lockFile, nil
+}
+
+func configuredPort() int {
+	portValue := os.Getenv("WHATSAPP_BRIDGE_PORT")
+	if portValue == "" {
+		return 8080
+	}
+	port, err := strconv.Atoi(portValue)
+	if err != nil || port <= 0 || port > 65535 {
+		fmt.Printf("Invalid WHATSAPP_BRIDGE_PORT %q, using 8080\n", portValue)
+		return 8080
+	}
+	return port
+}
+
 // Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string) (bool, string) {
-	if !client.IsConnected() {
-		return false, "Not connected to WhatsApp"
+func sendWhatsAppMessage(client *whatsmeow.Client, state *BridgeState, recipient string, message string, mediaPath string) (bool, string) {
+	if ok, status := state.SendStatus(client.IsConnected()); !ok {
+		return false, status
 	}
 
 	// Create JID for recipient
@@ -675,8 +855,29 @@ func extractDirectPathFromURL(url string) string {
 	return "/" + pathPart
 }
 
+func clientJID(client *whatsmeow.Client) string {
+	if client.Store.ID == nil {
+		return ""
+	}
+	return client.Store.ID.String()
+}
+
 // Start a REST API server to expose the WhatsApp client functionality
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
+func startRESTServer(client *whatsmeow.Client, state *BridgeState, messageStore *MessageStore, port int) {
+	http.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(HealthResponse{
+			Connected:    client.IsConnected(),
+			LoggedOut:    state.IsLoggedOut(),
+			Reconnecting: state.IsReconnecting(),
+			JID:          clientJID(client),
+		})
+	})
+
 	// Handler for sending messages
 	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
@@ -706,7 +907,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		fmt.Println("Received request to send message", req.Message, req.MediaPath)
 
 		// Send the message
-		success, message := sendWhatsAppMessage(client, req.Recipient, req.Message, req.MediaPath)
+		success, message := sendWhatsAppMessage(client, state, req.Recipient, req.Message, req.MediaPath)
 		fmt.Println("Message sent", success, message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
@@ -799,6 +1000,12 @@ func main() {
 		logger.Errorf("Failed to create store directory: %v", err)
 		return
 	}
+	lockFile, err := acquireSingleInstanceLock("store/whatsapp.db.lock")
+	if err != nil {
+		logger.Errorf("%v", err)
+		return
+	}
+	defer lockFile.Close()
 
 	container, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
 	if err != nil {
@@ -825,6 +1032,26 @@ func main() {
 		logger.Errorf("Failed to create WhatsApp client")
 		return
 	}
+	bridgeState := NewBridgeState()
+	reconnectManager := NewReconnectManager(bridgeState, ReconnectConfig{
+		Connect: func() error {
+			if client.IsConnected() {
+				return nil
+			}
+			return client.Connect()
+		},
+		HasSession: func() bool {
+			return client.Store.ID != nil
+		},
+		MinBackoff: time.Second,
+		MaxBackoff: time.Minute,
+		OnError: func(err error, sleepFor time.Duration) {
+			logger.Warnf("Reconnect failed: %v; retrying in %s", err, sleepFor)
+		},
+		OnSuccess: func() {
+			logger.Infof("Reconnected to WhatsApp")
+		},
+	})
 
 	// Initialize message store
 	messageStore, err := NewMessageStore()
@@ -846,9 +1073,23 @@ func main() {
 			handleHistorySync(client, messageStore, v, logger)
 
 		case *events.Connected:
+			bridgeState.SetConnected()
 			logger.Infof("Connected to WhatsApp")
 
+		case *events.Disconnected:
+			logger.Warnf("Disconnected from WhatsApp; reconnecting")
+			reconnectManager.Start("disconnected")
+
+		case *events.StreamReplaced:
+			logger.Warnf("WhatsApp stream was replaced; reconnecting")
+			reconnectManager.Start("stream replaced")
+
+		case *events.KeepAliveTimeout:
+			logger.Warnf("WhatsApp keepalive timed out; reconnecting")
+			reconnectManager.Start("keepalive timeout")
+
 		case *events.LoggedOut:
+			bridgeState.SetLoggedOut()
 			logger.Warnf("Device logged out, please scan QR code to log in again")
 		}
 	})
@@ -902,11 +1143,12 @@ func main() {
 		logger.Errorf("Failed to establish stable connection")
 		return
 	}
+	bridgeState.SetConnected()
 
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
 	// Start REST API server
-	startRESTServer(client, messageStore, 8080)
+	startRESTServer(client, bridgeState, messageStore, configuredPort())
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
