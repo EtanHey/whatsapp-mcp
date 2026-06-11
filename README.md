@@ -211,6 +211,24 @@ Configure the MCP server to point at the right bridge:
 - If you encounter permission issues when running uv, you may need to add it to your PATH or use the full path to the executable.
 - Make sure both the Go application and the Python server are running for the integration to work properly.
 
+### Boot Health Probe
+
+This fork includes a conservative local probe for a launchd-managed setup:
+
+```bash
+bash scripts/health-probe.sh
+```
+
+The probe checks the personal bridge, the business bridge, and the external Telegram notify server on port `3847`. It exits non-zero and prints `DOWN: <service> (<port>)` when any service is unreachable.
+
+To run it at load and every 60 seconds with launchd:
+
+```bash
+bash scripts/install-launchd.sh
+```
+
+The notify server is external to this repository; the probe only verifies that its local port is reachable.
+
 ### Authentication Issues
 
 - **QR Code Not Displaying**: If the QR code doesn't appear, try restarting the authentication script. If issues persist, check if your terminal supports displaying QR codes.
