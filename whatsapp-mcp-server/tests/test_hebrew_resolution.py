@@ -6,14 +6,14 @@ from pathlib import Path
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
 
-EFFIE_LID = "272751982018765@lid"
-EFFIE_PHONE = "972525314213"
-EFFIE_ALIAS = "אפי עוד פרילנס"
-SELF_LID = "129386544119851@lid"
-SELF_PHONE = "972547589755"
-SELF_ALIAS = "Etan Heyman"
-UNMAPPED_LID = "72585064759394@lid"
-UNMAPPED_RAW_NAME = "72585064759394"
+DANA_LID = "100000000000001@lid"
+DANA_PHONE = "972500000001"
+DANA_ALIAS = "דנה בדיקה"
+SELF_LID = "100000000000002@lid"
+SELF_PHONE = "972500000002"
+SELF_ALIAS = "Test Self"
+UNMAPPED_LID = "100000000000003@lid"
+UNMAPPED_RAW_NAME = "100000000000003"
 
 
 def load_whatsapp_module(monkeypatch, messages_db_path: Path, whatsmeow_db_path: Path | None = None):
@@ -120,11 +120,11 @@ def setup_chat_store(tmp_path: Path, chats: list[dict[str, str]], with_whatsmeow
         create_whatsmeow_db(
             whatsmeow_db,
             lid_map_rows=[
-                ("272751982018765", EFFIE_PHONE),
-                ("129386544119851", SELF_PHONE),
+                ("100000000000001", DANA_PHONE),
+                ("100000000000002", SELF_PHONE),
             ],
             contact_rows=[
-                ("me@s.whatsapp.net", f"{EFFIE_PHONE}@s.whatsapp.net", "אפי", EFFIE_ALIAS, "Efi A"),
+                ("me@s.whatsapp.net", f"{DANA_PHONE}@s.whatsapp.net", "דנה", DANA_ALIAS, "Dana T"),
                 ("me@s.whatsapp.net", f"{SELF_PHONE}@s.whatsapp.net", "Etan", SELF_ALIAS, "Etan"),
             ],
         )
@@ -135,35 +135,35 @@ def setup_chat_store(tmp_path: Path, chats: list[dict[str, str]], with_whatsmeow
 def test_list_chats_resolves_hebrew_name(monkeypatch, tmp_path):
     messages_db, _ = setup_chat_store(
         tmp_path,
-        chats=[{"jid": EFFIE_LID, "name": "129386544119851", "timestamp": "2026-04-30T10:00:00"}],
+        chats=[{"jid": DANA_LID, "name": "100000000000002", "timestamp": "2026-04-30T10:00:00"}],
     )
     whatsapp = load_whatsapp_module(monkeypatch, messages_db)
 
-    chats = whatsapp.list_chats(query="אפי")
+    chats = whatsapp.list_chats(query="דנה")
 
     assert len(chats) == 1
-    assert chats[0].jid == EFFIE_LID
-    assert chats[0].name == EFFIE_ALIAS
+    assert chats[0].jid == DANA_LID
+    assert chats[0].name == DANA_ALIAS
 
 
 def test_search_contacts_resolves_hebrew_name(monkeypatch, tmp_path):
     messages_db, _ = setup_chat_store(
         tmp_path,
-        chats=[{"jid": EFFIE_LID, "name": "129386544119851", "timestamp": "2026-04-30T10:00:00"}],
+        chats=[{"jid": DANA_LID, "name": "100000000000002", "timestamp": "2026-04-30T10:00:00"}],
     )
     whatsapp = load_whatsapp_module(monkeypatch, messages_db)
 
-    contacts = whatsapp.search_contacts("אפי")
+    contacts = whatsapp.search_contacts("דנה")
 
     assert len(contacts) == 1
-    assert contacts[0].jid == EFFIE_LID
-    assert contacts[0].name == EFFIE_ALIAS
+    assert contacts[0].jid == DANA_LID
+    assert contacts[0].name == DANA_ALIAS
 
 
 def test_falls_back_when_whatsmeow_db_missing(monkeypatch, tmp_path):
     messages_db, _ = setup_chat_store(
         tmp_path,
-        chats=[{"jid": EFFIE_LID, "name": "Legacy Contact", "timestamp": "2026-04-30T10:00:00"}],
+        chats=[{"jid": DANA_LID, "name": "Legacy Contact", "timestamp": "2026-04-30T10:00:00"}],
         with_whatsmeow=False,
     )
     whatsapp = load_whatsapp_module(monkeypatch, messages_db)
@@ -191,22 +191,22 @@ def test_falls_back_when_lid_not_in_map(monkeypatch, tmp_path):
 def test_resolves_effie_lid(monkeypatch, tmp_path):
     messages_db, _ = setup_chat_store(
         tmp_path,
-        chats=[{"jid": EFFIE_LID, "name": "129386544119851", "timestamp": "2026-04-30T10:00:00"}],
+        chats=[{"jid": DANA_LID, "name": "100000000000002", "timestamp": "2026-04-30T10:00:00"}],
     )
     whatsapp = load_whatsapp_module(monkeypatch, messages_db)
 
-    chats = whatsapp.list_chats(query="272751982018765@lid")
+    chats = whatsapp.list_chats(query="100000000000001@lid")
 
     assert len(chats) == 1
-    assert chats[0].name == EFFIE_ALIAS
+    assert chats[0].name == DANA_ALIAS
 
 
 def test_does_not_resolve_etan_self_lid(monkeypatch, tmp_path):
     messages_db, _ = setup_chat_store(
         tmp_path,
         chats=[
-            {"jid": EFFIE_LID, "name": "129386544119851", "timestamp": "2026-04-30T10:00:00"},
-            {"jid": SELF_LID, "name": "129386544119851", "timestamp": "2026-04-30T11:00:00"},
+            {"jid": DANA_LID, "name": "100000000000002", "timestamp": "2026-04-30T10:00:00"},
+            {"jid": SELF_LID, "name": "100000000000002", "timestamp": "2026-04-30T11:00:00"},
         ],
     )
     whatsapp = load_whatsapp_module(monkeypatch, messages_db)
@@ -216,7 +216,7 @@ def test_does_not_resolve_etan_self_lid(monkeypatch, tmp_path):
     assert len(chats) == 1
     assert chats[0].jid == SELF_LID
     assert chats[0].name == SELF_ALIAS
-    assert chats[0].name != EFFIE_ALIAS
+    assert chats[0].name != DANA_ALIAS
 
 
 def test_list_chats_deduplicates_multiple_contact_rows(monkeypatch, tmp_path):
@@ -227,20 +227,20 @@ def test_list_chats_deduplicates_multiple_contact_rows(monkeypatch, tmp_path):
 
     create_messages_db(
         messages_db,
-        chats=[{"jid": EFFIE_LID, "name": "129386544119851", "timestamp": "2026-04-30T10:00:00"}],
+        chats=[{"jid": DANA_LID, "name": "100000000000002", "timestamp": "2026-04-30T10:00:00"}],
     )
     create_whatsmeow_db(
         whatsmeow_db,
-        lid_map_rows=[("272751982018765", EFFIE_PHONE)],
+        lid_map_rows=[("100000000000001", DANA_PHONE)],
         contact_rows=[
-            ("me@s.whatsapp.net", f"{EFFIE_PHONE}@s.whatsapp.net", "אפי", EFFIE_ALIAS, "Efi A"),
-            ("alt@s.whatsapp.net", f"{EFFIE_PHONE}@s.whatsapp.net", "אפי", EFFIE_ALIAS, "Efi A"),
+            ("me@s.whatsapp.net", f"{DANA_PHONE}@s.whatsapp.net", "דנה", DANA_ALIAS, "Dana T"),
+            ("alt@s.whatsapp.net", f"{DANA_PHONE}@s.whatsapp.net", "דנה", DANA_ALIAS, "Dana T"),
         ],
     )
     whatsapp = load_whatsapp_module(monkeypatch, messages_db, whatsmeow_db)
 
-    chats = whatsapp.list_chats(query="אפי")
+    chats = whatsapp.list_chats(query="דנה")
 
     assert len(chats) == 1
-    assert chats[0].jid == EFFIE_LID
-    assert chats[0].name == EFFIE_ALIAS
+    assert chats[0].jid == DANA_LID
+    assert chats[0].name == DANA_ALIAS
