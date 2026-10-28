@@ -188,7 +188,7 @@ def test_falls_back_when_lid_not_in_map(monkeypatch, tmp_path):
     assert chats[0].name == UNMAPPED_RAW_NAME
 
 
-def test_resolves_dana_lid(monkeypatch, tmp_path):
+def test_resolves_contact_lid(monkeypatch, tmp_path):
     messages_db, _ = setup_chat_store(
         tmp_path,
         chats=[{"jid": DANA_LID, "name": "100000000000002", "timestamp": "2026-04-30T10:00:00"}],
